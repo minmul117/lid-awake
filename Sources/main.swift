@@ -17,6 +17,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         set { UserDefaults.standard.set(newValue, forKey: "minBattery") }
     }
 
+    /// 켜져 있는 동안의 동작 방식
+    enum Mode: String, CaseIterable {
+        case systemAndDisplay   // 시스템 + 화면 유지 (caffeinate -dims)
+        case systemOnly         // 시스템만 유지, 화면은 평소처럼 꺼짐 (caffeinate -ims)
+
+        var title: String {
+            switch self {
+            case .systemAndDisplay: return "시스템 + 화면 유지"
+            case .systemOnly:       return "시스템만 유지 (화면은 꺼짐)"
+            }
+        }
+
+        var caffeinateFlags: String {
+            switch self {
+            case .systemAndDisplay: return "-dims"
+            case .systemOnly:       return "-ims"
+            }
+        }
+    }
+
+    private var mode: Mode {
+        get { Mode(rawValue: UserDefaults.standard.string(forKey: "mode") ?? "") ?? .systemAndDisplay }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "mode") }
+    }
+
     // MARK: - Lifecycle
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -47,6 +72,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         menu.addItem(label(isOn ? "● 깨어 있음 (뚜껑 닫아도 유지)" : "○ 꺼짐 (평소처럼 잠자기)"))
         menu.addItem(item(isOn ? "끄기" : "켜기", #selector(toggle), key: "t"))
+        menu.addItem(.separator())
+
+        menu.addItem(label("모드"))
+        for m in Mode.allCases {
+            let mi = item(m.title, #selector(setMode(_:)))
+            mi.representedObject = m.rawValue
+            mi.state = (m == mode) ? .on : .off
+            mi.indentationLevel = 1
+            menu.addItem(mi)
+        }
         menu.addItem(.separator())
 
         let p = powerInfo()
@@ -91,7 +126,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let img = NSImage(systemSymbolName: name, accessibilityDescription: "Lid Awake")
         img?.isTemplate = true
         statusItem.button?.image = img
-        statusItem.button?.toolTip = isOn ? "Lid Awake: 켜짐" : "Lid Awake: 꺼짐"
+        statusItem.button?.toolTip = isOn ? "Lid Awake: 켜짐 · \(mode.title)" : "Lid Awake: 꺼짐"
     }
 
     // MARK: - Actions
@@ -104,6 +139,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         isOn = target
         target ? startCaffeinate() : stopCaffeinate()
+        updateIcon()
+    }
+
+    @objc private func setMode(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let m = Mode(rawValue: raw), m != mode else { return }
+        mode = m
+        // 켜져 있으면 새 옵션으로 caffeinate 재시작 (pmset 설정은 그대로)
+        if isOn {
+            stopCaffeinate()
+            startCaffeinate()
+        }
         updateIcon()
     }
 
@@ -177,7 +224,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/caffeinate")
         // -w: 이 앱이 종료되면 caffeinate도 같이 종료
-        p.arguments = ["-dims", "-w", String(ProcessInfo.processInfo.processIdentifier)]
+        p.arguments = [mode.caffeinateFlags, "-w", String(ProcessInfo.processInfo.processIdentifier)]
         do {
             try p.run()
             caffeinate = p
@@ -187,7 +234,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func stopCaffeinate() {
-        caffeinate?.terminate()
+        if let p = caffeinate, p.isRunning {
+            p.terminate()
+            p.waitUntilExit()
+        }
         caffeinate = nil
     }
 
