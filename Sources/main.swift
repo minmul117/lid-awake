@@ -2,6 +2,7 @@
 // pmset disablesleep + caffeinate, 배터리 보호, 로그인 시 실행
 
 import AppKit
+import IOKit
 import IOKit.ps
 import ServiceManagement
 
@@ -9,7 +10,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
     private var caffeinate: Process?
     private var timer: Timer?
+    private var lidTimer: Timer?
     private var isOn = false
+    private var lidClosed = false
+    private var caffeinateFlags: String?
 
     /// 배터리 사용 중 이 % 미만이면 자동 해제 (0 = 사용 안 함)
     private var minBattery: Int {
@@ -57,6 +61,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         timer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
             self?.tick()
         }
+
+        // 뚜껑 상태 감시 (2초 간격, IORegistry 값 하나 읽는 가벼운 작업)
+        lidClosed = readLidClosed()
+        lidTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+            self?.checkLid()
+        }
+    }
+
+    // MARK: - Lid handling
+
+    /// 뚜껑이 닫히면 모드와 상관없이 화면 유지(-d)를 풀고 화면을 즉시 끔
+    /// → 닫힌 뚜껑 안에서 화면이 켜져 있지 않고, "디스플레이 꺼진 후 암호 요구" 잠금이 걸림
+    private func checkLid() {
+        let closed = readLidClosed()
+        guard closed != lidClosed else { return }
+        lidClosed = closed
+        guard isOn else { return }
+
+        restartCaffeinateIfNeeded()
+        if closed {
+            run("/usr/bin/pmset", ["displaysleepnow"])
+        }
+    }
+
+    private func readLidClosed() -> Bool {
+        let root = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("IOPMrootDomain"))
+        guard root != 0 else { return false }
+        defer { IOObjectRelease(root) }
+        let value = IORegistryEntryCreateCFProperty(root, "AppleClamshellState" as CFString, kCFAllocatorDefault, 0)?
+            .takeRetainedValue()
+        return (value as? Bool) ?? false
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -147,10 +182,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
               let m = Mode(rawValue: raw), m != mode else { return }
         mode = m
         // 켜져 있으면 새 옵션으로 caffeinate 재시작 (pmset 설정은 그대로)
-        if isOn {
-            stopCaffeinate()
-            startCaffeinate()
-        }
+        if isOn { restartCaffeinateIfNeeded() }
         updateIcon()
     }
 
@@ -219,17 +251,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return err == nil
     }
 
+    /// 뚜껑이 닫혀 있으면 화면 유지 없이 시스템만 유지
+    private var desiredCaffeinateFlags: String {
+        lidClosed ? Mode.systemOnly.caffeinateFlags : mode.caffeinateFlags
+    }
+
     private func startCaffeinate() {
         guard caffeinate == nil else { return }
+        let flags = desiredCaffeinateFlags
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/caffeinate")
         // -w: 이 앱이 종료되면 caffeinate도 같이 종료
-        p.arguments = [mode.caffeinateFlags, "-w", String(ProcessInfo.processInfo.processIdentifier)]
+        p.arguments = [flags, "-w", String(ProcessInfo.processInfo.processIdentifier)]
         do {
             try p.run()
             caffeinate = p
+            caffeinateFlags = flags
         } catch {
             caffeinate = nil
+            caffeinateFlags = nil
         }
     }
 
@@ -239,6 +279,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             p.waitUntilExit()
         }
         caffeinate = nil
+        caffeinateFlags = nil
+    }
+
+    private func restartCaffeinateIfNeeded() {
+        guard caffeinateFlags != desiredCaffeinateFlags else { return }
+        stopCaffeinate()
+        startCaffeinate()
     }
 
     // MARK: - Helpers
