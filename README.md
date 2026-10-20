@@ -69,6 +69,7 @@ scripts/build.sh            swiftc 빌드 + ad-hoc 서명
 scripts/install.sh          빌드 + /Applications 교체 설치
 scripts/setup-sudoers.sh    sudoers 등록 (visudo 문법 검사 후 설치)
 extras/swiftbar/            같은 기능의 SwiftBar 플러그인 버전
+AGENTS.md                   AI 코딩 에이전트용 안내 (CLAUDE.md는 이 파일의 심링크)
 ```
 
 ## 릴리스
