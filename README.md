@@ -5,12 +5,13 @@
 
 ## 기능
 
-- 메뉴 막대 ☕ 아이콘으로 켜기/끄기 (켜짐: 채워진 컵)
+- 메뉴 막대 ☕ 아이콘으로 켜기/끄기 (켜짐: 주황색 채워진 컵, 꺼짐: 흐린 빈 컵)
 - 켜면 `pmset -a disablesleep 1` + `caffeinate` 를 함께 적용
-- **모드 선택** (메뉴 → 모드, 켜져 있는 중에도 바로 전환)
+- **모드 선택** (메뉴 → 모드, 켜져 있는 중에도 바로 전환, 항목에 마우스를 올리면 설명 툴팁)
   - *시스템 + 화면 유지* (`caffeinate -dims`, 기본값): 뚜껑을 연 채 잠가도 화면이 켜진 상태로 유지
   - *시스템만 유지* (`caffeinate -ims`): 시스템은 깨어 있고 화면은 평소처럼 꺼짐 — 잠금 화면 방치용
   - 두 모드 모두 화면 잠금 상태와 뚜껑 닫힘에서 계속 깨어 있음 (로그아웃하면 앱이 종료되며 해제)
+  - 꺼져 있을 때는 모드와 배터리 보호가 잠김 (선택값은 그대로 유지)
 - **뚜껑 닫힘 감지**: 뚜껑이 닫히면 모드와 상관없이 화면 유지를 풀고 `pmset displaysleepnow`로 화면을 즉시 끔
   - 닫힌 뚜껑 안에서 화면이 켜져 발열하는 것을 방지
   - "디스플레이가 꺼진 후 암호 요구" 설정이 있으면 화면 잠금이 걸림
@@ -34,13 +35,18 @@ make install      # 빌드 → /Applications 교체 설치 → 실행
 
 코드를 고친 뒤에도 `make install` 한 번이면 기존 앱을 종료하고 새 버전으로 바꿉니다.
 
-### (선택) 암호 없이 전환
+### 관리자 암호 (처음 한 번)
+
+처음 켜거나 끌 때 관리자 암호 창이 한 번 뜹니다. 이때 앱이 `/etc/sudoers.d/lidawake`를 등록해
+(`pmset -a disablesleep 0/1` 두 명령만 허용, `visudo` 문법 검사 통과 시에만 설치) 다음부터는 암호 없이 전환됩니다.
+
+첫 암호 창 없이 미리 등록하려면(SwiftBar 플러그인도 이 규칙을 씀):
 
 ```bash
-make sudoers      # /etc/sudoers.d/lidawake 등록 (pmset disablesleep 0/1만 허용)
+make sudoers      # /etc/sudoers.d/lidawake 등록
 ```
 
-없으면 켜고 끌 때마다 관리자 암호 창이 뜹니다. 제거: `sudo rm /etc/sudoers.d/lidawake`
+제거: `sudo rm /etc/sudoers.d/lidawake` (`make uninstall`도 함께 제거)
 
 ## 명령 요약
 
@@ -49,8 +55,8 @@ make sudoers      # /etc/sudoers.d/lidawake 등록 (pmset disablesleep 0/1만 �
 | `make build` | `build/LidAwake.app` 생성 |
 | `make run` | 빌드 후 설치하지 않고 바로 실행 |
 | `make install` | 빌드 + `/Applications` 설치 + 실행 |
-| `make uninstall` | 종료 + `/Applications`에서 삭제 |
-| `make sudoers` | 암호 없는 전환 설정 |
+| `make uninstall` | 종료 + `/Applications`에서 삭제 + sudoers 규칙 제거 |
+| `make sudoers` | 암호 없는 전환 규칙 미리 등록 |
 | `make clean` | `build/` 삭제 |
 
 ## 구조

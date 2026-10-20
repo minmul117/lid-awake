@@ -12,6 +12,7 @@ run: build
 uninstall:
 	-pkill -x LidAwake
 	rm -rf /Applications/LidAwake.app
+	@if [ -f /etc/sudoers.d/lidawake ]; then sudo rm -f /etc/sudoers.d/lidawake; fi
 
 sudoers:
 	./scripts/setup-sudoers.sh

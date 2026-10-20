@@ -29,7 +29,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         var title: String {
             switch self {
             case .systemAndDisplay: return "시스템 + 화면 유지"
-            case .systemOnly:       return "시스템만 유지 (화면은 꺼짐)"
+            case .systemOnly:       return "시스템만 유지"
+            }
+        }
+
+        /// 메뉴 항목 툴팁
+        var detail: String {
+            switch self {
+            case .systemAndDisplay: return "뚜껑을 연 채 화면을 잠가도 화면이 켜진 상태로 유지됩니다."
+            case .systemOnly:       return "시스템은 깨어 있고, 화면은 평소처럼 꺼집니다."
             }
         }
 
@@ -52,6 +60,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         let menu = NSMenu()
         menu.delegate = self
+        // 꺼져 있을 때 모드·배터리 보호를 잠그기 위해 isEnabled를 직접 관리
+        menu.autoenablesItems = false
         statusItem.menu = menu
 
         isOn = readSleepDisabled()
@@ -105,16 +115,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
 
-        menu.addItem(label(isOn ? "● 깨어 있음 (뚜껑 닫아도 유지)" : "○ 꺼짐 (평소처럼 잠자기)"))
+        menu.addItem(statusLabel())
         menu.addItem(item(isOn ? "끄기" : "켜기", #selector(toggle), key: "t"))
         menu.addItem(.separator())
 
-        menu.addItem(label("모드"))
+        // 꺼져 있을 때는 모드·배터리 보호를 잠금 (선택값은 그대로 표시)
+        menu.addItem(label("모드", hint: isOn ? nil : "켜면 바꿀 수 있어요"))
         for m in Mode.allCases {
             let mi = item(m.title, #selector(setMode(_:)))
             mi.representedObject = m.rawValue
             mi.state = (m == mode) ? .on : .off
             mi.indentationLevel = 1
+            mi.toolTip = m.detail
+            mi.isEnabled = isOn
             menu.addItem(mi)
         }
         menu.addItem(.separator())
@@ -132,6 +145,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         let guardItem = NSMenuItem(title: "배터리 보호", action: nil, keyEquivalent: "")
         guardItem.submenu = guardMenu
+        guardItem.isEnabled = isOn
         menu.addItem(guardItem)
 
         if #available(macOS 13.0, *) {
@@ -141,12 +155,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         menu.addItem(.separator())
-        menu.addItem(item("종료 (잠자기 설정 복원)", #selector(quit), key: "q"))
+        let qi = item("종료", #selector(quit), key: "q")
+        qi.toolTip = "앱을 종료하고 잠자기 설정을 원래대로 되돌립니다."
+        menu.addItem(qi)
     }
 
-    private func label(_ title: String) -> NSMenuItem {
+    /// 맨 위 상태 줄: 꺼짐은 회색 ○, 켜짐은 주황색 ● + 굵은 글씨
+    private func statusLabel() -> NSMenuItem {
+        let size = NSFont.menuFont(ofSize: 0).pointSize
+        let text = isOn ? "● 깨어 있음 · 뚜껑 닫아도 유지" : "○ 꺼짐 · 평소처럼 잠자기"
+        let mi = label(text)
+        mi.attributedTitle = NSAttributedString(string: text, attributes: [
+            .font: isOn ? NSFont.boldSystemFont(ofSize: size) : NSFont.menuFont(ofSize: size),
+            .foregroundColor: isOn ? NSColor.systemOrange : NSColor.secondaryLabelColor,
+        ])
+        return mi
+    }
+
+    /// 선택할 수 없는 안내 줄. hint가 있으면 제목 옆에 작고 흐린 글씨로 덧붙임
+    private func label(_ title: String, hint: String? = nil) -> NSMenuItem {
         let mi = NSMenuItem(title: title, action: nil, keyEquivalent: "")
         mi.isEnabled = false
+        if let hint {
+            let s = NSMutableAttributedString(string: title, attributes: [
+                .font: NSFont.menuFont(ofSize: 0),
+                .foregroundColor: NSColor.disabledControlTextColor,
+            ])
+            s.append(NSAttributedString(string: "  " + hint, attributes: [
+                .font: NSFont.menuFont(ofSize: NSFont.smallSystemFontSize),
+                .foregroundColor: NSColor.tertiaryLabelColor,
+            ]))
+            mi.attributedTitle = s
+        }
         return mi
     }
 
@@ -156,11 +196,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return mi
     }
 
+    /// 켜짐: 주황색 채워진 컵, 꺼짐: 흐린 빈 컵
     private func updateIcon() {
         let name = isOn ? "cup.and.saucer.fill" : "cup.and.saucer"
-        let img = NSImage(systemSymbolName: name, accessibilityDescription: "Lid Awake")
-        img?.isTemplate = true
+        var img = NSImage(systemSymbolName: name, accessibilityDescription: "Lid Awake")
+        if isOn {
+            img = img?.withSymbolConfiguration(.init(paletteColors: [.systemOrange]))
+            img?.isTemplate = false
+        } else {
+            img?.isTemplate = true
+        }
         statusItem.button?.image = img
+        statusItem.button?.appearsDisabled = !isOn
         statusItem.button?.toolTip = isOn ? "Lid Awake: 켜짐 · \(mode.title)" : "Lid Awake: 꺼짐"
     }
 
@@ -240,15 +287,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     /// 1) sudoers에 등록돼 있으면 암호 없이, 2) 아니면 관리자 암호 창으로
+    /// 암호 창에서 받은 권한으로 sudoers 규칙도 같이 설치 → 다음부터는 1)로 처리
     private func setSleepDisabled(_ on: Bool) -> Bool {
         let v = on ? "1" : "0"
         if run("/usr/bin/sudo", ["-n", "/usr/bin/pmset", "-a", "disablesleep", v]).status == 0 {
             return true
         }
-        let script = "do shell script \"/usr/bin/pmset -a disablesleep \(v)\" with administrator privileges"
+        var command = "/usr/bin/pmset -a disablesleep \(v)"
+        var prompt = "Lid Awake가 잠자기 설정을 바꾸려고 합니다."
+        if let install = sudoersInstallCommand() {
+            // 규칙 설치가 실패해도 pmset은 실행 (전체 종료 코드는 pmset 결과)
+            command = install + "; " + command
+            prompt += " 다음부터는 암호를 묻지 않도록 설정합니다."
+        }
+        let script = "do shell script \(appleScriptString(command)) with prompt \(appleScriptString(prompt)) with administrator privileges"
         var err: NSDictionary?
         NSAppleScript(source: script)?.executeAndReturnError(&err)
         return err == nil
+    }
+
+    /// pmset disablesleep 0/1만 암호 없이 허용하는 규칙 (scripts/setup-sudoers.sh와 같은 내용)
+    /// visudo 문법 검사를 통과해야만 설치. 사용자 이름에 예상 밖의 문자가 있으면 nil
+    private func sudoersInstallCommand() -> String? {
+        let user = NSUserName()
+        guard !user.isEmpty,
+              user.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || "._-".contains($0)) })
+        else { return nil }
+        let rule = "\(user) ALL=(root) NOPASSWD: /usr/bin/pmset -a disablesleep 0, /usr/bin/pmset -a disablesleep 1"
+        return "f=$(/usr/bin/mktemp /tmp/lidawake.XXXXXX) && /usr/bin/printf '%s\\n' '\(rule)' > \"$f\""
+            + " && /usr/sbin/visudo -cf \"$f\" >/dev/null"
+            + " && /usr/bin/install -m 0440 -o root -g wheel \"$f\" /etc/sudoers.d/lidawake"
+            + "; /bin/rm -f \"$f\""
+    }
+
+    private func appleScriptString(_ s: String) -> String {
+        "\"" + s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
     }
 
     /// 뚜껑이 닫혀 있으면 화면 유지 없이 시스템만 유지
